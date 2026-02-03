@@ -3,6 +3,22 @@ import os
 import time
 from dotenv import load_dotenv
 
+
+# --- 3. CATÁLOGO DE IMÁGENES (Configuración) ---
+# Definimos las imágenes aquí para no tener "números mágicos" por el código.
+# Estrategia: Usamos tags específicos (v4.0.1) en lugar de 'latest' para evitar roturas.
+
+IMAGENES_DOCKER = {
+    "IMAGEN_ESTANDAR": "ashleykleynhans/runpod-comfyui:2.1.0", # Ejemplo de imagen popular de Comfy
+    "VIDEO_HIGH_MEM":  "runpod/stable-diffusion:comfy-video-v1", # (Inventada para el ejemplo)
+    "DEV_BASE":        "runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel"
+}
+
+# Variable de configuración actual (Esto permite el ROLLBACK rápido)
+# Si la versión nueva falla, solo cambiamos esta línea a "DEV_BASE" y redeplegamos.
+IMAGEN_ACTUAL_PRODUCCION = IMAGENES_DOCKER["IMAGEN_ESTANDAR"]
+
+
 # --- CONFIGURACIÓN INICIAL ---
 # Cargar variables de entorno desde .env
 load_dotenv()
@@ -43,22 +59,29 @@ def test_connection():
         print(f"❌ Error de conexión (Detalle): {e}")
         return False
 
-def create_worker_pod():
+def create_worker_pod(tipo_trabajo="imagen"):
     """
-    Crea un Pod en Community Cloud.
-    NOTA: Esta función GASTA SALDO real. Úsala con precaución.
+    Crea un Pod usando la imagen definida en el catálogo.
     """
-    print("🚀 Iniciando despliegue de Pod...")
+    # Selección inteligente de imagen
+    if tipo_trabajo == "video":
+        imagen_a_usar = IMAGENES_DOCKER["VIDEO_HIGH_MEM"]
+        gpu_id = "NVIDIA A100 80GB PCIe" # Vídeo pide más VRAM
+    else:
+        imagen_a_usar = IMAGENES_DOCKER["IMAGEN_ESTANDAR"] # Usamos la versión "Pinned"
+        gpu_id = "NVIDIA GeForce RTX 4090"
+
+    print(f"🚀 Desplegando Worker para [{tipo_trabajo}] usando imagen: {imagen_a_usar}...")
+    
     try:
         pod = runpod.create_pod(
-            name="Worker-DAM-Proyecto",
-            image_name="runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel",
-            gpu_type_id="NVIDIA GeForce RTX 4090", 
+            name=f"Worker-{tipo_trabajo.capitalize()}",
+            image_name=imagen_a_usar,  # <--- AQUÍ USAMOS EL CATÁLOGO
+            gpu_type_id=gpu_id, 
             cloud_type="COMMUNITY", 
             gpu_count=1,
-            volume_in_gb=20,
-            ports="8188/http", # Puerto típico de ComfyUI
-            # terminate_after=10 # OJO: Esto apagaría el pod a los 10 mins (seguridad)
+            volume_in_gb=40,
+            ports="8188/http",
         )
         print(f"✅ Pod creado con ID: {pod['id']}")
         return pod['id']
