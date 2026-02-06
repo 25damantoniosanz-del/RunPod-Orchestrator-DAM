@@ -6,6 +6,7 @@ import json
 import random
 import requests
 from datetime import datetime
+from main import get_pod_addr
 
 # --- INTENTO DE IMPORTAR TU MÓDULO MAIN ---
 # Si no existe main.py, usamos funciones dummy para que el script no falle al probarlo
@@ -236,17 +237,15 @@ class QueueOrchestrator:
         
         print(f"✅ Job {job.id} TERMINADO. Coste: ${coste_real:.6f} (Total acumulado: ${self.total_spent_today:.4f})")
 
-    def execute_on_pod(self, job, pod_id):
-        """
-        Envía el trabajo REAL al Pod de RunPod usando la IP pública.
-        Requiere que el Pod tenga puerto 8188 expuesto.
-        """
+   def execute_on_pod(self, job, pod_id):
         try:
-            # Obtenemos la IP del Pod (esto asume que main.py o runpod pueden dartela)
-            # En un caso real, al crear el pod guardamos su IP. 
-            # Para este ejemplo, usaremos una IP placeholder o localhost si estás haciendo forwarding.
-            pod_ip = "127.0.0.1" # O la IP pública de tu pod: pod['runtime']['ports'][0]['ip']
-            url = f"http://{pod_ip}:8188/prompt"
+            # CORRECCIÓN: Obtener la IP real dinámicamente
+            address = get_pod_addr(pod_id)
+            if not address:
+                print(f"⚠️ El Pod {pod_id} no está listo o no tiene IP pública.")
+                return False
+                
+            url = f"http://{address}/prompt"
             
             # Cargamos el workflow plantilla
             with open("workflow_api.json", "r") as f:

@@ -11,3 +11,6 @@ codigo_proyecto.txt
 # Ignorar JSONs generados (resultados), PERO mantener la plantilla
 *.json
 !workflow_api.json
+proyecto_completo.txt
+
+*.pyc

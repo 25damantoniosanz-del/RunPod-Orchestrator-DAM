@@ -98,6 +98,23 @@ def stop_worker_pod(pod_id):
         print(f"⚠️ No se pudo detener el pod: {e}")
 
 # --- EJECUCIÓN DEL SCRIPT ---
+def get_pod_addr(pod_id):
+    """Busca la IP pública y el puerto mapeado del 8188"""
+    try:
+        pod = runpod.get_pod(pod_id)
+        # Si el pod no está corriendo, no tiene IP
+        if pod['desiredStatus'] != 'RUNNING':
+            return None
+            
+        # Buscamos el puerto interno 8188 y vemos su mapeo externo
+        if 'runtime' in pod and 'ports' in pod['runtime']:
+            for port in pod['runtime']['ports']:
+                if port['privatePort'] == 8188:
+                    return f"{port['ip']}:{port['publicPort']}"
+        return None
+    except Exception as e:
+        print(f"Error obteniendo IP: {e}")
+        return None
 if __name__ == "__main__":
     print("--- INICIANDO SISTEMA DE ORQUESTACIÓN ---")
     
