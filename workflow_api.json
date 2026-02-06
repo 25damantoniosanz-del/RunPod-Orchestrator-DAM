@@ -1,0 +1,122 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 797376299970818,
+      "steps": 30,
+      "cfg": 7,
+      "sampler_name": "dpmpp_2m_sde",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "bigLust_v16.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Cargar Punto de Control"
+    }
+  },
+  "5": {
+    "inputs": {
+      "width": [
+        "10",
+        0
+      ],
+      "height": [
+        "10",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Imagen Latente Vacía"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "A portrait of a blonde woman",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "text, watermark",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Decodificación VAE"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Guardar Imagen"
+    }
+  },
+  "10": {
+    "inputs": {
+      "resolution": "square - 1024x1024 (1:1)"
+    },
+    "class_type": "SDXL Resolutions (JPS)",
+    "_meta": {
+      "title": "SDXL Resolutions (JPS)"
+    }
+  }
+}

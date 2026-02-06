@@ -1,0 +1,683 @@
+﻿==============================================================================
+ ARCHIVO: benchmark.py
+ RUTA RELATIVA: \benchmark.py
+==============================================================================
+import json
+import time
+import numpy as np
+import random 
+from urllib import request, error
+
+# --- CONFIGURACIÃ“N ---
+ITERACIONES = 10               
+
+# --- CONFIGURACIÃ“N DE URL ---
+url_input = input("Introduce la URL del Pod (Enter para local 127.0.0.1:8188): ").strip()
+
+if not url_input:
+    COMFY_URL = "http://127.0.0.1:8188"
+else:
+    COMFY_URL = url_input.rstrip("/")
+    if not COMFY_URL.startswith("http"):
+        COMFY_URL = f"https://{COMFY_URL}"
+
+print(f"ðŸŽ¯ Apuntando a: {COMFY_URL}")
+
+# HEADERS (Disfraz de navegador)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Content-Type": "application/json",
+    "Accept": "*/*"
+}
+
+def get_available_model():
+    """Pregunta al servidor quÃ© modelos tiene instalados."""
+    try:
+        req = request.Request(f"{COMFY_URL}/object_info/CheckpointLoaderSimple", headers=HEADERS)
+        with request.urlopen(req) as response:
+            data = json.loads(response.read())
+            # RunPod suele tener SDXL o v1.5. Cogemos el primero de la lista.
+            modelos = data['CheckpointLoaderSimple']['input']['required']['ckpt_name'][0]
+            if modelos:
+                print(f"âœ… Modelo detectado en servidor: {modelos[0]}")
+                return modelos[0]
+            return None
+    except Exception as e:
+        print(f"âš ï¸ No pude detectar modelos automÃ¡ticamente: {e}")
+        return None
+
+def build_workflow(model_name):
+    """Crea un workflow bÃ¡sico en memoria usando el modelo detectado."""
+    # Este es un flujo estÃ¡ndar Txt2Img que funciona en cualquier ComfyUI
+    return {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "cfg": 8, "denoise": 1, "latent_image": ["5", 0], "model": ["4", 0],
+                "negative": ["7", 0], "positive": ["6", 0], "sampler_name": "euler",
+                "scheduler": "normal", "seed": 0, "steps": 20
+            }
+        },
+        "4": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": { "ckpt_name": model_name }
+        },
+        "5": {
+            "class_type": "EmptyLatentImage",
+            "inputs": { "batch_size": 1, "height": 512, "width": 512 }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "clip": ["4", 1], "text": "landscape of a futuristic city, high quality" }
+        },
+        "7": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "clip": ["4", 1], "text": "bad quality, blurred" }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["3", 0], "vae": ["4", 2] }
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": "Benchmark_RunPod", "images": ["8", 0] }
+        }
+    }
+
+def queue_prompt(workflow):
+    p = {"prompt": workflow}
+    data = json.dumps(p).encode('utf-8')
+    req = request.Request(f"{COMFY_URL}/prompt", data=data, headers=HEADERS)
+    try:
+        response = request.urlopen(req)
+        return json.loads(response.read())
+    except error.HTTPError as e:
+        print(f"âŒ Error HTTP {e.code}: {e.read().decode('utf-8')}")
+        return None
+    except Exception as e:
+        print(f"âŒ Error conexiÃ³n: {e}")
+        return None
+
+def get_history(prompt_id):
+    try:
+        req = request.Request(f"{COMFY_URL}/history/{prompt_id}", headers=HEADERS)
+        with request.urlopen(req) as response:
+            return json.loads(response.read())
+    except:
+        return {}
+
+def run_benchmark():
+    print("ðŸ” Analizando servidor remoto...")
+    model_name = get_available_model()
+    
+    if not model_name:
+        print("âŒ No encontrÃ© ningÃºn modelo checkpoints en el servidor. Â¿EstÃ¡ vacÃ­o?")
+        return
+
+    # Generamos el workflow dinÃ¡micamente
+    workflow = build_workflow(model_name)
+    
+    print(f"ðŸš€ Iniciando Benchmark ({ITERACIONES} iteraciones)...")
+    tiempos = []
+
+    for i in range(ITERACIONES):
+        # Anti-CachÃ©: Cambiar semilla y texto
+        semilla = int(time.time() * 1000) + i
+        workflow["3"]["inputs"]["seed"] = semilla
+        workflow["6"]["inputs"]["text"] = f"landscape of a futuristic city, high quality --no_cache_{semilla}"
+
+        start_time = time.time()
+        
+        response = queue_prompt(workflow)
+        if not response: 
+            print("âŒ Fallo al enviar prompt. Abortando.")
+            break
+            
+        prompt_id = response['prompt_id']
+        
+        while True:
+            history = get_history(prompt_id)
+            if prompt_id in history:
+                break
+            time.sleep(0.1)
+            
+        duration = time.time() - start_time
+        tiempos.append(duration)
+        print(f"   IteraciÃ³n {i+1}: {duration:.2f}s")
+
+    if tiempos:
+        avg_time = np.mean(tiempos)
+        print("\n" + "="*40)
+        print(f"ðŸ“Š RESULTADOS FINALES ({model_name})")
+        print("="*40)
+        print(f"Tiempo Medio:   {avg_time:.2f} s")
+        print("="*40)
+
+if __name__ == "__main__":
+    run_benchmark()
+
+
+
+==============================================================================
+ ARCHIVO: main.py
+ RUTA RELATIVA: \main.py
+==============================================================================
+import runpod
+import os
+import time
+from dotenv import load_dotenv
+
+
+# --- 3. CATÃLOGO DE IMÃGENES (ConfiguraciÃ³n) ---
+# Definimos las imÃ¡genes aquÃ­ para no tener "nÃºmeros mÃ¡gicos" por el cÃ³digo.
+# Estrategia: Usamos tags especÃ­ficos (v4.0.1) en lugar de 'latest' para evitar roturas.
+
+IMAGENES_DOCKER = {
+    "IMAGEN_ESTANDAR": "ashleykleynhans/runpod-comfyui:2.1.0", # Ejemplo de imagen popular de Comfy
+    "VIDEO_HIGH_MEM":  "runpod/stable-diffusion:comfy-video-v1", # (Inventada para el ejemplo)
+    "DEV_BASE":        "runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel"
+}
+
+# Variable de configuraciÃ³n actual (Esto permite el ROLLBACK rÃ¡pido)
+# Si la versiÃ³n nueva falla, solo cambiamos esta lÃ­nea a "DEV_BASE" y redeplegamos.
+IMAGEN_ACTUAL_PRODUCCION = IMAGENES_DOCKER["IMAGEN_ESTANDAR"]
+
+
+# --- CONFIGURACIÃ“N INICIAL ---
+# Cargar variables de entorno desde .env
+load_dotenv()
+api_key = os.getenv("RUNPOD_API_KEY")
+
+if not api_key:
+    raise ValueError("âŒ ERROR: No se encontrÃ³ RUNPOD_API_KEY en el archivo .env")
+
+runpod.api_key = api_key
+
+# --- FUNCIONES DE ORQUESTACIÃ“N ---
+
+def test_connection():
+    """Verifica que la API Key funciona y tenemos saldo/acceso."""
+    try:
+        user = runpod.get_user()
+        print(f"âœ… ConexiÃ³n Ã‰XITO. Saldo: ${user.get('credit', 0)}")
+        
+        # Listar GPUs
+        gpus = runpod.get_gpus()
+        if gpus:
+            # Cogemos la primera para ver quÃ© tiene dentro
+            gpu_ejemplo = gpus[0]
+            
+            # INTENTO DE RECUPERAR PRECIO DE FORMA SEGURA
+            # RunPod a veces cambia 'communityPrice' por 'communitySpotPrice' o similar.
+            # Esto busca el precio, y si no estÃ¡, pone "N/A" en vez de fallar.
+            precio = gpu_ejemplo.get('communityPrice', gpu_ejemplo.get('minSpotPrice', 'N/A'))
+            nombre = gpu_ejemplo.get('id', 'GPU Desconocida')
+            
+            print(f"ðŸ‘€ GPU Detectada: {nombre} - Precio aprox: ${precio}/hr")
+        else:
+            print("âš ï¸ ConexiÃ³n buena, pero no se devolviÃ³ lista de GPUs (Â¿Filtros activados?)")
+            
+        return True
+    except Exception as e:
+        # Imprimimos el error completo para debug
+        print(f"âŒ Error de conexiÃ³n (Detalle): {e}")
+        return False
+
+def create_worker_pod(tipo_trabajo="imagen"):
+    """
+    Crea un Pod usando la imagen definida en el catÃ¡logo.
+    """
+    # SelecciÃ³n inteligente de imagen
+    if tipo_trabajo == "video":
+        imagen_a_usar = IMAGENES_DOCKER["VIDEO_HIGH_MEM"]
+        gpu_id = "NVIDIA A100 80GB PCIe" # VÃ­deo pide mÃ¡s VRAM
+    else:
+        imagen_a_usar = IMAGENES_DOCKER["IMAGEN_ESTANDAR"] # Usamos la versiÃ³n "Pinned"
+        gpu_id = "NVIDIA GeForce RTX 4090"
+
+    print(f"ðŸš€ Desplegando Worker para [{tipo_trabajo}] usando imagen: {imagen_a_usar}...")
+    
+    try:
+        pod = runpod.create_pod(
+            name=f"Worker-{tipo_trabajo.capitalize()}",
+            image_name=imagen_a_usar,  # <--- AQUÃ USAMOS EL CATÃLOGO
+            gpu_type_id=gpu_id, 
+            cloud_type="COMMUNITY", 
+            gpu_count=1,
+            volume_in_gb=40,
+            ports="8188/http",
+        )
+        print(f"âœ… Pod creado con ID: {pod['id']}")
+        return pod['id']
+    except Exception as e:
+        print(f"âŒ Error al crear Pod: {e}")
+        return None
+
+def stop_worker_pod(pod_id):
+    """Detiene un pod para no consumir GPU (aunque cobra disco)."""
+    try:
+        runpod.stop_pod(pod_id)
+        print(f"ðŸ›‘ Pod {pod_id} detenido correctamente.")
+    except Exception as e:
+        print(f"âš ï¸ No se pudo detener el pod: {e}")
+
+# --- EJECUCIÃ“N DEL SCRIPT ---
+if __name__ == "__main__":
+    print("--- INICIANDO SISTEMA DE ORQUESTACIÃ“N ---")
+    
+    # 1. Test de conexiÃ³n
+    if test_connection():
+        print("\n--- TEST SUPERADO: Entorno listo ---")
+        
+        # PASO CRITICO: Descomenta las siguientes lÃ­neas SOLO si quieres crear una mÃ¡quina real
+        # y tienes saldo en la cuenta ($5 min).
+        
+        # nuevo_pod_id = create_worker_pod()
+        # if nuevo_pod_id:
+        #     print("Esperando 10 segundos antes de apagar...")
+        #     time.sleep(10)
+        #     stop_worker_pod(nuevo_pod_id)
+        
+    else:
+        print("Revisa tu API Key en el archivo .env")
+
+
+
+==============================================================================
+ ARCHIVO: queue_system.py
+ RUTA RELATIVA: \queue_system.py
+==============================================================================
+import time
+import uuid
+import hashlib
+import logging
+import json
+import random
+from datetime import datetime
+
+# --- INTENTO DE IMPORTAR TU MÃ“DULO MAIN ---
+# Si no existe main.py, usamos funciones dummy para que el script no falle al probarlo
+try:
+    from main import create_worker_pod, stop_worker_pod
+except ImportError:
+    print("âš ï¸  Aviso: 'main.py' no encontrado. Usando funciones simuladas.")
+    def create_worker_pod(tipo_trabajo="imagen"): return "POD-SIMULADO-123"
+    def stop_worker_pod(pod_id): print(f"ðŸ›‘ Pod {pod_id} detenido (SimulaciÃ³n).")
+
+# ==========================================
+# CONFIGURACIÃ“N DEL SISTEMA (PUNTOS 5, 6, 7)
+# ==========================================
+
+# ConfiguraciÃ³n de Colas (Punto 5)
+MAX_RETRIES = 3            # Intentos antes de DLQ
+BACKOFF_FACTOR = 2         # Espera exponencial (2s, 4s, 8s...)
+MAX_CONCURRENT_JOBS = 1    # Rate Limiting
+AUTO_SCALE_THRESHOLD = 5   # Umbral para crear mÃ¡quinas
+
+# ConfiguraciÃ³n de Costes y Observabilidad (Punto 6)
+PRECIO_GPU_HORA = 0.29     # $/h (RTX 3090)
+PRESUPUESTO_DIARIO = 5.0   # LÃ­mite de gasto ($)
+LOG_FILE = "production.log"
+
+# ConfiguraciÃ³n de Seguridad (Punto 7)
+BANNED_WORDS = ["violencia", "sangre", "nsfw", "desnudo", "ilegal", "droga"]
+MAX_PROMPT_LENGTH = 500
+
+# ConfiguraciÃ³n del Logger (Genera el archivo production.log)
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# ==========================================
+# CLASES DEL SISTEMA
+# ==========================================
+
+class Job:
+    def __init__(self, prompt):
+        self.id = str(uuid.uuid4())[:8]
+        self.prompt = prompt
+        self.status = "PENDING"
+        # Timestamps para mÃ©tricas
+        self.created_at = time.time()
+        self.finished_at = None
+        self.retries = 0
+        self.cost = 0.0
+        # Hash para deduplicaciÃ³n
+        self.prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
+        self.history_log = []
+
+    def log(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.history_log.append(f"[{timestamp}] {message}")
+
+class QueueOrchestrator:
+    def __init__(self):
+        self.pending_queue = []
+        self.active_jobs = {}
+        self.completed_jobs = []
+        self.dead_letter_queue = []
+        self.active_hashes = set()
+        
+        # Estado de Infraestructura
+        self.worker_pod_id = None
+        
+        # Estado Financiero
+        self.total_spent_today = 0.0
+
+    # --- PUNTO 7: SANITIZACIÃ“N Y SEGURIDAD ---
+    def validate_input(self, prompt):
+        """Filtro de seguridad antes de aceptar el trabajo"""
+        # 1. Longitud
+        if not prompt or len(prompt) > MAX_PROMPT_LENGTH:
+            return False, "Prompt invÃ¡lido o demasiado largo (>500 chars)"
+        
+        # 2. Palabras prohibidas (GuardarraÃ­l)
+        for bad_word in BANNED_WORDS:
+            if bad_word in prompt.lower():
+                return False, f"Contenido prohibido detectado: '{bad_word}'"
+        
+        return True, "OK"
+
+    # --- PUNTO 5, 6 y 7: SUBMIT & DEDUPLICACIÃ“N ---
+    def submit_job(self, prompt):
+        # A) VALIDACIÃ“N DE SEGURIDAD (Punto 7)
+        is_valid, message = self.validate_input(prompt)
+        if not is_valid:
+            print(f"â›” Job Rechazado (Seguridad): {message}")
+            logging.warning(f"SECURITY REJECTION | Prompt: {prompt[:20]}... | Reason: {message}")
+            return None
+
+        # B) DEDUPLICACIÃ“N (Punto 5)
+        prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
+        if prompt_hash in self.active_hashes:
+            print(f"âš ï¸ Job Duplicado rechazado: '{prompt[:20]}...'")
+            return None
+        
+        # C) CONTROL DE PRESUPUESTO (Punto 6)
+        if self.total_spent_today >= PRESUPUESTO_DIARIO:
+            print("ðŸ’° ALARMA: Presupuesto diario excedido. Rechazando trabajo.")
+            return None
+
+        # Si pasa todo, creamos el Job
+        new_job = Job(prompt)
+        self.pending_queue.append(new_job)
+        self.active_hashes.add(prompt_hash)
+        new_job.log("Job aceptado y encolado.")
+        print(f"ðŸ“¥ Job Recibido: {new_job.id}")
+        return new_job.id
+
+    # --- PUNTO 5: BUCLE PRINCIPAL ---
+    def process_queue(self):
+        print("\nðŸ”„ Iniciando Orquestador Inteligente (Ctrl+C para parar)...")
+        try:
+            while True:
+                # 1. Auto-Scaling
+                self.check_auto_scaling()
+
+                # 2. AsignaciÃ³n de trabajos
+                if len(self.active_jobs) < MAX_CONCURRENT_JOBS and self.pending_queue:
+                    job = self.pending_queue.pop(0)
+                    self.run_job_async(job)
+
+                # 3. Espera activa
+                time.sleep(1)
+                
+                # Feedback visual si estÃ¡ ocioso
+                if not self.pending_queue and not self.active_jobs:
+                    print(f"ðŸ’¤ Ocioso (Gasto hoy: ${self.total_spent_today:.4f})...", end="\r")
+
+        except KeyboardInterrupt:
+            print("\nðŸ›‘ Deteniendo sistema...")
+            if self.worker_pod_id:
+                print(f"ðŸ§¹ Limpiando recursos: Apagando Pod {self.worker_pod_id}")
+                stop_worker_pod(self.worker_pod_id)
+
+    # --- PUNTO 5: AUTO-SCALING ---
+    def check_auto_scaling(self):
+        queue_size = len(self.pending_queue)
+        
+        # Scale Up
+        if queue_size > 0 and self.worker_pod_id is None:
+            print(f"ðŸš¨ Cola detectada ({queue_size} jobs). Solicitando GPU...")
+            self.worker_pod_id = create_worker_pod(tipo_trabajo="imagen")
+            print(f"âœ… Infraestructura lista: {self.worker_pod_id}")
+
+        # Scale Down (Ahorro)
+        elif queue_size == 0 and not self.active_jobs and self.worker_pod_id:
+            print("ðŸ“‰ Cola vacÃ­a. Apagando worker para ahorrar dinero.")
+            stop_worker_pod(self.worker_pod_id)
+            self.worker_pod_id = None
+
+    # --- PUNTO 5: EJECUCIÃ“N ASÃNCRONA ---
+    def run_job_async(self, job):
+        job.status = "PROCESSING"
+        self.active_jobs[job.id] = job
+        print(f"âš™ï¸ Procesando Job {job.id}...")
+        
+        try:
+            # SimulaciÃ³n de llamada a API
+            success = self.mock_api_call(job)
+            
+            if success:
+                self.complete_job(job, "resultado.png")
+            else:
+                raise Exception("Error 504 Gateway Timeout")
+
+        except Exception as e:
+            self.handle_failure(job, str(e))
+
+    # --- PUNTO 5: GESTIÃ“N DE FALLOS (BACKOFF + DLQ) ---
+    def handle_failure(self, job, error_msg):
+        job.retries += 1
+        wait_time = BACKOFF_FACTOR ** job.retries
+        
+        job.log(f"Fallo detectado: {error_msg}")
+        print(f"âš ï¸ Error en {job.id}. Reintentando en {wait_time}s...")
+        
+        del self.active_jobs[job.id]
+        
+        if job.retries >= MAX_RETRIES:
+            job.status = "DEAD"
+            job.log("Movido a DLQ.")
+            self.dead_letter_queue.append(job)
+            self.active_hashes.remove(job.prompt_hash) # Liberamos hash para permitir reintento manual
+            print(f"ðŸ’€ Job {job.id} MUERTO (DLQ).")
+            # Log de error crÃ­tico
+            logging.error(f"DLQ ENTRY | Job: {job.id} | Prompt: {job.prompt} | Error: {error_msg}")
+        else:
+            time.sleep(wait_time) # SimulaciÃ³n de espera
+            job.status = "PENDING"
+            self.pending_queue.insert(0, job)
+
+    # --- PUNTO 6: COMPLETADO Y CÃLCULO DE COSTES ---
+    def complete_job(self, job, result):
+        job.finished_at = time.time()
+        duration = job.finished_at - job.created_at
+        
+        # CÃLCULO DE FINOPS
+        coste_real = (PRECIO_GPU_HORA / 3600) * duration
+        job.cost = coste_real
+        self.total_spent_today += coste_real
+
+        job.status = "COMPLETED"
+        self.active_hashes.remove(job.prompt_hash)
+        if job.id in self.active_jobs:
+            del self.active_jobs[job.id]
+
+        # LOGGING ESTRUCTURADO (JSON)
+        log_data = {
+            "event": "JOB_COMPLETED",
+            "job_id": job.id,
+            "duration_s": round(duration, 2),
+            "cost_usd": round(coste_real, 6),
+            "model": "RTX 3090",
+            "prompt_hash": job.prompt_hash
+        }
+        logging.info(json.dumps(log_data))
+        
+        print(f"âœ… Job {job.id} TERMINADO. Coste: ${coste_real:.6f} (Total acumulado: ${self.total_spent_today:.4f})")
+
+    def mock_api_call(self, job):
+        """Simula la API"""
+        time.sleep(2) # Tiempo de inferencia
+        # Simular fallo si el prompt lo dice
+        if "fallo" in job.prompt.lower(): return False
+        return True
+
+# ==========================================
+# ZONA DE TEST
+# ==========================================
+if __name__ == "__main__":
+    sistema = QueueOrchestrator()
+    
+    print("--- ðŸ§ª TEST DE INTEGRACIÃ“N COMPLETO (PUNTOS 5, 6, 7) ---")
+    
+    # 1. Prueba de Seguridad (Debe ser rechazado)
+    sistema.submit_job("Generar una imagen con mucha violencia y sangre")
+    
+    # 2. Prueba de DeduplicaciÃ³n
+    sistema.submit_job("Un paisaje tranquilo")
+    sistema.submit_job("Un paisaje tranquilo") # Rechazado por duplicado
+    
+    # 3. Prueba de Fallo y DLQ
+    sistema.submit_job("Quiero que esto de fallo de conexiÃ³n")
+    
+    # 4. Trabajo Normal
+    sistema.submit_job("Un astronauta en marte")
+    
+    # Iniciar motor
+    sistema.process_queue()
+
+
+
+==============================================================================
+ ARCHIVO: workflow_api.json
+ RUTA RELATIVA: \workflow_api.json
+==============================================================================
+{
+  "3": {
+    "inputs": {
+      "seed": 797376299970818,
+      "steps": 30,
+      "cfg": 7,
+      "sampler_name": "dpmpp_2m_sde",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "bigLust_v16.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Cargar Punto de Control"
+    }
+  },
+  "5": {
+    "inputs": {
+      "width": [
+        "10",
+        0
+      ],
+      "height": [
+        "10",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Imagen Latente VacÃ­a"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "A portrait of a blonde woman",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "text, watermark",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "DecodificaciÃ³n VAE"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Guardar Imagen"
+    }
+  },
+  "10": {
+    "inputs": {
+      "resolution": "square - 1024x1024 (1:1)"
+    },
+    "class_type": "SDXL Resolutions (JPS)",
+    "_meta": {
+      "title": "SDXL Resolutions (JPS)"
+    }
+  }
+}
+
+
+

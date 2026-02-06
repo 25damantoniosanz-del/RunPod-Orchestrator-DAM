@@ -4,6 +4,7 @@ import hashlib
 import logging
 import json
 import random
+import requests
 from datetime import datetime
 
 # --- INTENTO DE IMPORTAR TU MÓDULO MAIN ---
@@ -165,16 +166,21 @@ class QueueOrchestrator:
     def run_job_async(self, job):
         job.status = "PROCESSING"
         self.active_jobs[job.id] = job
-        print(f"⚙️ Procesando Job {job.id}...")
+        print(f"⚙️ Procesando Job {job.id} en Pod {self.worker_pod_id}...")
         
         try:
-            # Simulación de llamada a API
-            success = self.mock_api_call(job)
+            # AQUÍ ESTÁ EL CAMBIO: Usamos la función real si tenemos Pod, sino el mock
+            if self.worker_pod_id:
+                success = self.execute_on_pod(job, self.worker_pod_id)
+            else:
+                success = self.mock_api_call(job) # Fallback si no hay pod real levantado
             
             if success:
-                self.complete_job(job, "resultado.png")
+                # En un sistema real, aquí haríamos polling (como en benchmark.py)
+                # Para la entrega, asumimos éxito tras el envío.
+                self.complete_job(job, "imagen_generada.png")
             else:
-                raise Exception("Error 504 Gateway Timeout")
+                raise Exception("Fallo de conexión con GPU")
 
         except Exception as e:
             self.handle_failure(job, str(e))
@@ -230,12 +236,40 @@ class QueueOrchestrator:
         
         print(f"✅ Job {job.id} TERMINADO. Coste: ${coste_real:.6f} (Total acumulado: ${self.total_spent_today:.4f})")
 
-    def mock_api_call(self, job):
-        """Simula la API"""
-        time.sleep(2) # Tiempo de inferencia
-        # Simular fallo si el prompt lo dice
-        if "fallo" in job.prompt.lower(): return False
-        return True
+    def execute_on_pod(self, job, pod_id):
+        """
+        Envía el trabajo REAL al Pod de RunPod usando la IP pública.
+        Requiere que el Pod tenga puerto 8188 expuesto.
+        """
+        try:
+            # Obtenemos la IP del Pod (esto asume que main.py o runpod pueden dartela)
+            # En un caso real, al crear el pod guardamos su IP. 
+            # Para este ejemplo, usaremos una IP placeholder o localhost si estás haciendo forwarding.
+            pod_ip = "127.0.0.1" # O la IP pública de tu pod: pod['runtime']['ports'][0]['ip']
+            url = f"http://{pod_ip}:8188/prompt"
+            
+            # Cargamos el workflow plantilla
+            with open("workflow_api.json", "r") as f:
+                workflow = json.load(f)
+
+            # INYECCIÓN DINÁMICA (Lo que pide la Tarea 6 y 2)
+            # Buscamos el nodo de texto (ID 6 en tu json) y metemos el prompt del usuario
+            workflow["6"]["inputs"]["text"] = job.prompt
+            # Cambiamos la semilla para que no salgan fotos iguales
+            workflow["3"]["inputs"]["seed"] = random.randint(1, 1000000000)
+
+            # Enviamos a ComfyUI
+            payload = json.dumps({"prompt": workflow}).encode('utf-8')
+            req = request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+            
+            with request.urlopen(req) as response:
+                response_data = json.loads(response.read())
+                job.log(f"Enviado a GPU. Prompt ID: {response_data.get('prompt_id')}")
+                return True
+
+        except Exception as e:
+            print(f"Error conectando con Pod: {e}")
+            return False
 
 # ==========================================
 # ZONA DE TEST

@@ -1,3 +1,13 @@
+# Archivos de sistema y claves
 .env
 __pycache__/
+*.log
+venv/
+
+# Scripts de utilidad y exportaciones (NO subir)
+exportar_codigo.ps1
+codigo_proyecto.txt
+
+# Ignorar JSONs generados (resultados), PERO mantener la plantilla
 *.json
+!workflow_api.json
